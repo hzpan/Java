@@ -1,0 +1,245 @@
+package ca.uwaterloo.Lab4_202_26;
+
+import java.util.WeakHashMap;
+
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.util.Log;
+import android.widget.TextView;
+import mapper.Mapper;
+
+/**
+ * Class receives information from SensorManager when accelerometer values have changed
+ * Calculates the steps the user has taken, as well as the north-south and east-west displacement of the user
+ * 
+ * Outputs values, and graphs acceleration on each axis.
+ */
+
+public class AccelerationSensorEventListener implements SensorEventListener {
+
+	TextView output;
+	static Mapper mapView;
+	PathPlanner pathPlanner = new PathPlanner(mapView, 1f);
+//	LineGraphView graphView;
+	
+	public static int stepCounter = 0; 
+	public static int stateCounter = 0;
+	
+	public static float sum = 0;
+	public static int avgCount = 0;
+	public static double avgOrientation = 0;
+	public static float northDisplace = 0;
+	public static float eastDisplace = 0;
+	public static boolean negative = false;
+	
+	public static float [] list = new float[3];
+	public static float [] R = new float [9];
+	public static float [] I = new float [9];
+	public static float[] result = new float [3];
+	
+	private static float xMax = 0;
+	private static float yMax = 0;
+	private static float zMax = 0;
+	private static float zMin = 0;
+	
+	private static float[] xArray = new float [2];
+	private static float[] yArray = new float [2];
+	private static float[] zArray = new float [2];
+
+	
+	public static void stepCounter (float[] inputArray){
+				
+		if (inputArray[0] > 3.4 || inputArray[0] < -3.4 ){
+			stateCounter = 0;
+		}
+		else {
+			
+			switch(stateCounter){
+//			State 0 where we need the acceleration to be positive and below 9.0 (the max acceleration we have limited the step counter to)
+				case 0:
+					negative = false;
+					sum = 0;
+					avgCount = 0;
+					if (9.0 > inputArray[2] && inputArray[2] > 1.2){
+						stateCounter ++;
+						
+//						Log.d("Switch", "case 0: " +  Integer.toString(stateCounter));
+						sum += Math.abs(list[0]);
+						avgCount++;
+					}
+					else {
+						stateCounter = 0;
+					}
+					break;
+					
+//			State 1 where we need the acceleration to decrease back to 0 
+				case 1: 
+					if (inputArray[2] <1.2){
+						if (list[0]<0){
+							negative = true;
+						}
+						sum += Math.abs(list[0]);
+						avgCount++;
+						stateCounter ++; 
+//						Log.d("Switch", "case 1: " +  Integer.toString(stateCounter));
+					}
+					break;
+					
+//			State 2 where we need the acceleration go to its minimum (falling), but still be above our set limit of -13  	
+				case 2:
+//					if ((-13.0 < inputArray[2] && inputArray[2] < 0.0) && Math.abs(inputArray[1]) > 0.7f * Math.abs(inputArray[2])){
+					if ((-13.0 < inputArray[2] && inputArray[2] < 0.0)){
+						if (list[0]<0){
+							negative = true;
+						}
+						
+						sum += Math.abs(list[0]);
+						avgCount++;
+						stateCounter ++;
+					}
+					else {
+						stateCounter = 0;
+					}
+					break;
+//			State 3: if the acceleration then returns to 0, this counts as one step
+//					we also finish calculating the north-south and east-west orientation components of the step
+//					and add those components to our running count of the displacement in each axis
+				case 3: 
+					if (inputArray[2] > 0.0){
+						if (list[0]<0){
+							negative = true;
+						}
+						
+						sum += Math.abs(list[0]);
+						avgCount++;
+						avgOrientation = sum/avgCount;
+//						avgOrientation = (double) list[0]*Math.PI/180;
+						if (negative){
+							avgOrientation = -1*avgOrientation;
+						}
+						//stateCounter ++;
+						stateCounter = 0;
+						stepCounter++;
+						
+						northDisplace += Math.cos(avgOrientation);
+						eastDisplace += Math.sin(avgOrientation);
+						mapView.userPoint.x += Math.cos(avgOrientation);
+						mapView.userPoint.y += Math.sin(avgOrientation);
+						
+						Log.d("before", mapView.getUserPoint()+"");
+						mapView.setUserPath(mapView.userPath);
+						Log.d("after", mapView.getUserPoint()+"");
+					}
+					break;
+				default:
+					stateCounter = 0;
+			}
+		}
+		
+			
+	}
+
+//	This is the method we used to filter out values
+	public static float LowPassFilter(float[] sensorInput ){
+		float previousInput = sensorInput[0];
+		float currentInput = sensorInput[1];
+		currentInput = 0.3f*previousInput + 0.7f*currentInput;
+		
+		return currentInput;
+		
+		
+	}
+	
+	// Resets stored maximum values for step counter, axis displacements, and accelerometer x, y, z axes, 
+	public static void reset(){
+		stepCounter = 0;
+		northDisplace = 0;
+		eastDisplace = 0;
+		xMax = 0;
+		yMax = 0;
+		zMax = 0;
+	}
+	
+	// Class constructor specifying TextView and graph on which to display data 
+//	public AccelerationSensorEventListener (TextView outputView, LineGraphView graph){
+	public AccelerationSensorEventListener (TextView outputView, Mapper map){
+		output = outputView;
+//		graphView = graph;
+		mapView = map;
+	}
+	
+	@Override
+	public void onAccuracyChanged(Sensor s, int i) {}
+
+	@Override
+	public void onSensorChanged(SensorEvent se) {
+		
+//		Define a rotation sensor event listener for the rotation matrix and orientation
+		RotationalSensorEventListener rotationVector = new RotationalSensorEventListener();
+		SensorManager.getRotationMatrixFromVector(R, rotationVector.getResult());
+//		Get orientation; first value in 'list' is compass bearing, north=0
+		SensorManager.getOrientation(R, list);
+		
+		
+		if (se.sensor.getType() == Sensor.TYPE_LINEAR_ACCELERATION){
+		
+//			store the new value and previous value in to an array and pass to LowPass Filter Method for filtering
+			xArray[0] = xArray [1];
+			xArray[1] = se.values[0];
+//			assign the Filtered value into an array called result
+			result [0] = LowPassFilter(xArray);
+			
+			yArray[0] = yArray [1];
+			yArray[1] = se.values[1];
+			result [1] = LowPassFilter(yArray);
+			
+			zArray[0] = zArray [1];
+			zArray[1] = se.values[2];
+			result [2] = LowPassFilter(zArray);
+			
+//			implement the step counter method (which also calculates displacement)
+			stepCounter(result);
+			
+//			check the new value and assign to variable if the new value is greater
+			if (xMax < Math.abs(se.values[0])){
+				xMax = Math.abs(se.values[0]);
+			}
+
+			if (yMax < Math.abs(se.values[1])){
+				yMax = Math.abs(se.values[1]);
+			}
+
+			if (zMax < Math.abs(se.values[2])){
+				zMax = Math.abs(se.values[2]);
+			}
+			
+			if (zMin > se.values[2]){
+				zMin = se.values[2];
+			}
+			
+// 			Output step counter, step displacements, and 
+//			new axes values and current axes maximums as text to three decimal places
+			
+			output.setText("--------------------Step Counter-------------------" + "\n" + 
+//							"X Max: " + String.format("%.3f", xMax) + "\n" + 
+//							"Y: " + String.format("%.3f", yMax) + "\n" + 
+//							"Z: " + String.format("%.3f", zMax) + "\n" + 
+//							"X Result: " + String.format("%.3f", result[0]) + "\n" + 
+//							"Y Result: " + String.format("%.3f", result[1]) + "\n" + 
+//							"Z Result: " + String.format("%.3f", result[2]) + "\n" +
+							"StepCounter : " + stepCounter + "\n" +
+//							"StateCounter: " +  stateCounter + "\n" +
+							"North Displacement: " + String.format("%.3f", northDisplace) + "\n" +
+							"East Displacement: " + String.format("%.3f", eastDisplace) + "\n" +
+							"Angle: " + String.format("%.3f Degree", list[0]/Math.PI*180) + "\n" +
+							"UserPoint: " + mapView.getUserPoint() + "\n" +
+							"SelectedPoint: " + mapView.getSelectedPoint()+ "\n" +
+							"-------------------------");
+//			mapView.setUserPath(mapView.userPath);
+			// Add new values to displayed graph
+//			graphView.addPoint(result);
+		}
+	}
+}
