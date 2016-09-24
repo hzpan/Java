@@ -1,0 +1,509 @@
+package ca.uwaterloo.Lab4_202_26;
+
+import java.net.NoRouteToHostException;
+import java.security.PublicKey;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.WeakHashMap;
+
+import org.w3c.dom.UserDataHandler;
+
+import android.R.string;
+import android.animation.FloatArrayEvaluator;
+import android.graphics.Path;
+import android.graphics.Point;
+import android.graphics.PointF;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.util.Log;
+import android.widget.TextView;
+import mapper.FloatHelper;
+import mapper.InterceptPoint;
+import mapper.Mapper;
+
+/**
+ * Class receives information from SensorManager when accelerometer values have changed
+ * Calculates the steps the user has taken, as well as the north-south and east-west displacement of the user
+ * 
+ * Outputs values, and graphs acceleration on each axis.
+ */
+
+public class AccelerationSensorEventListener implements SensorEventListener {
+
+	private static TextView output;
+	private static TextView instructionView;
+	private static Mapper mapView;
+	private static List <InterceptPoint> interceptPoints = new ArrayList<InterceptPoint>();
+	private static List<PointF> intercept = new ArrayList<PointF>();
+	private static PointF startPoint = new PointF();
+	private static PointF endPoint = new PointF();
+	private static PointF referencePoint = new PointF();
+	private static PointF destPoint = new PointF();
+	private static float angle = 0;
+	private static float referenceAngle = 0;
+	private static float returnAngle = 0;
+	private static float distance = 0;
+	private static float tolerance = 1.1f;
+	private static boolean isThereAWall = false;
+	private static boolean hitAWall = false;
+	private static boolean hitAWallAtFront = false;
+//	static PathPlanner pathPlanner = new PathPlanner(1f);
+//	PathPlanner pathPlanner;
+//	LineGraphView graphView;
+	
+	public static int stepCounter = 0; 
+	public static int stateCounter = 0;
+	
+	public static float sum = 0;
+	public static int avgCount = 0;
+	public static double avgOrientation = 0;
+	public static float northDisplace = 0;
+	private static float takeNorthStep = 0;
+	private static float takeEastStep = 0;
+	public static float eastDisplace = 0;
+	public static boolean negative = false;
+	private static String userInstruction = "take a step at 0/180 degree";
+	
+	public static float [] list = new float[3];
+	public static float [] R = new float [9];
+	public static float [] I = new float [9];
+	public static float[] result = new float [3];
+	
+	private static float xMax = 0;
+	private static float yMax = 0;
+	private static float zMax = 0;
+	private static float zMin = 0;
+	
+	private static float[] xArray = new float [2];
+	private static float[] yArray = new float [2];
+	private static float[] zArray = new float [2];
+
+	
+	public static void stepCounter (float[] inputArray){
+		
+		interceptPoints = mapView.calculateIntersections(mapView.getUserPoint(), 
+				mapView.getSelectedPoint());
+		
+		if (interceptPoints.isEmpty() == false){
+			isThereAWall = true;
+			
+		}
+		else {
+			isThereAWall = false;
+		}
+				
+		if (inputArray[0] > 3.4 || inputArray[0] < -3.4 ){
+			stateCounter = 0;
+		}
+		else {
+			
+			switch(stateCounter){
+//			State 0 where we need the acceleration to be positive and below 9.0 (the max acceleration we have limited the step counter to)
+				case 0:
+					negative = false;
+					sum = 0;
+					avgCount = 0;
+					if (9.0 > inputArray[2] && inputArray[2] > 1.2){
+						stateCounter ++;
+						
+//						Log.d("Switch", "case 0: " +  Integer.toString(stateCounter));
+						sum += Math.abs(list[0]);
+						avgCount++;
+					}
+					else {
+						stateCounter = 0;
+					}
+					break;
+					
+//			State 1 where we need the acceleration to decrease back to 0 
+				case 1: 
+					if (inputArray[2] <1.2){
+						if (list[0]<0){
+							negative = true;
+						}
+						sum += Math.abs(list[0]);
+						avgCount++;
+						stateCounter ++; 
+//						Log.d("Switch", "case 1: " +  Integer.toString(stateCounter));
+					}
+					break;
+					
+//			State 2 where we need the acceleration go to its minimum (falling), but still be above our set limit of -13  	
+				case 2:
+//					if ((-13.0 < inputArray[2] && inputArray[2] < 0.0) && Math.abs(inputArray[1]) > 0.7f * Math.abs(inputArray[2])){
+					if ((-13.0 < inputArray[2] && inputArray[2] < 0.0)){
+						if (list[0]<0){
+							negative = true;
+						}
+						
+						sum += Math.abs(list[0]);
+						avgCount++;
+						stateCounter ++;
+					}
+					else {
+						stateCounter = 0;
+					}
+					break;
+//			State 3: if the acceleration then returns to 0, this counts as one step
+//					we also finish calculating the north-south and east-west orientation components of the step
+//					and add those components to our running count of the displacement in each axis
+				case 3: 
+					if (inputArray[2] > 0.0){
+						if (list[0]<0){
+							negative = true;
+						}
+						
+						sum += Math.abs(list[0]);
+						avgCount++;
+						avgOrientation = sum/avgCount;
+//						avgOrientation = (double) list[0]*Math.PI/180;
+						if (negative){
+							avgOrientation = -1*avgOrientation;
+						}
+						//stateCounter ++;
+						stateCounter = 0;
+						stepCounter++;
+						takeNorthStep = (float) Math.cos(avgOrientation);
+						takeEastStep = (float) Math.sin(avgOrientation);
+						northDisplace += takeNorthStep;
+						eastDisplace += takeEastStep;
+						
+						if (isThereAWall == false){
+							
+							noWallWalking(mapView.getUserPoint(), mapView.getSelectedPoint(), takeEastStep, takeNorthStep);
+							
+						}
+						else {
+							//if we have a wall at between user point and selected point
+//							if (interceptPoints.isEmpty()== false){
+//								
+//								startPoint = interceptPoints.get(0).getPoint();
+//								endPoint = interceptPoints.get(interceptPoints.size()-1).getPoint();
+//								referencePoint.set(startPoint.x, startPoint.y +1);
+//								mapView.setStartPoint(startPoint);
+//								mapView.setDestPoint(endPoint);
+//							}
+							destPoint.set(mapView.getUserPoint().y, mapView.getSelectedPoint().x);
+							if (mapView.calculateIntersections(mapView.getUserPoint(), destPoint).isEmpty()
+									&& Math.abs(mapView.getUserPoint().x - destPoint.x) > tolerance){
+								if (mapView.getUserPoint().x > destPoint.x){
+									userInstruction = "walk at -90 degree direction";
+								}
+								else{
+									userInstruction = "walk at 90 degree direction";
+								}
+								
+								noWallWalking(mapView.getUserPoint(), destPoint, takeEastStep, takeNorthStep);
+							}
+							else if (mapView.calculateIntersections(mapView.getUserPoint(), destPoint).isEmpty() == true
+									&& Math.abs(mapView.getUserPoint().x - destPoint.x) < tolerance){
+								if (mapView.getUserPoint().y > mapView.getSelectedPoint().y){
+									userInstruction = "walk at 180 degree direction";
+								}
+								else{
+									userInstruction = "walk at 0 degree direction";
+								}
+								
+								noWallWalking(mapView.getUserPoint(), mapView.getSelectedPoint(), takeEastStep, takeNorthStep);
+							}
+							else{
+								if (mapView.getUserPoint().y > mapView.getSelectedPoint().y){
+									userInstruction = "walk at 180 degree direction";
+								}
+								else{
+									userInstruction = "walk at 0 degree direction";
+								}
+								
+								WalkingWithWall(mapView.getUserPoint(), mapView.getSelectedPoint(), takeEastStep, takeNorthStep);
+							}
+							
+							
+							
+						}
+						
+//						if (Math.abs(mapView.getUserPoint().x - mapView.getStartPoint().x) < tolerance	){
+//							
+//							userInstruction = "Please turn " + (180-(angle/Math.PI)*180) + " degree ClockWise";
+//							referenceAngle = list[0];
+//							
+//							mapView.setUserPoint(mapView.getUserPoint().x,
+//									mapView.getUserPoint().y + takeNorthStep);
+//							}
+//						else {
+//							
+//							mapView.setUserPoint(mapView.getUserPoint().x + takeEastStep,
+//									mapView.getUserPoint().y + takeNorthStep);
+//							
+//						}
+						
+					}
+					break;
+				default:
+					stateCounter = 0;
+			}
+		}
+		
+			
+	}
+	
+	
+	public static void noWallWalking (PointF firstPoint, PointF secondPoint, float eastStep, float northStep){
+		
+		if (Math.abs(firstPoint.x - secondPoint.x) > tolerance){
+			
+			if (firstPoint.x < secondPoint.x){
+				
+				userInstruction = "go at 90 degree ";
+				mapView.setUserPoint(mapView.getUserPoint().x + eastStep,
+						mapView.getUserPoint().y);
+			}
+			else if (mapView.getUserPoint().x > mapView.getSelectedPoint().x){
+				userInstruction = "go at -90 degree ";
+				mapView.setUserPoint(mapView.getUserPoint().x + eastStep,
+						mapView.getUserPoint().y);
+				}
+		}
+		else if (Math.abs(firstPoint.y - secondPoint.y) > tolerance){
+			
+			if (firstPoint.y < secondPoint.y){
+				
+				userInstruction = "go at 180 degree ";
+				mapView.setUserPoint(mapView.getUserPoint().x ,
+						mapView.getUserPoint().y + northStep);
+			}
+			else if (mapView.getUserPoint().y > mapView.getSelectedPoint().y){
+				userInstruction = "go at 0 degree ";
+				mapView.setUserPoint(mapView.getUserPoint().x ,
+						mapView.getUserPoint().y + northStep);
+				}
+			
+		}
+		else{
+			userInstruction = " you get there ";
+		}
+	}
+	
+//	public static void wallWalking (PointF firstPoint, PointF secondPoint, float eastStep, float northStep){
+//		mapView.setUserPoint(,y);
+//		if (mapView.){
+//			
+//		}
+//		
+//	} 
+	public static void WalkingWithWall (PointF firstPoint, PointF secondPoint, float eastStep, float northStep){
+		
+//		userInstruction = "pick a direction and walk";
+//		mapView.setUserPoint(mapView.getUserPoint().x + eastStep, mapView.getUserPoint().y + northStep);
+		if (hitAWallAtNorthSouth(mapView.getUserPoint()) && hitAWallAtEastWest(mapView.getUserPoint())){
+			userInstruction = "face the wall and turn 90 degree to right";
+			mapView.setUserPoint(mapView.getUserPoint().x, mapView.getUserPoint().y);
+			
+		}
+		
+		else if (hitAWallAtNorthSouth(mapView.getUserPoint())){
+			userInstruction = "face the wall and turn 90 degree to right";
+			mapView.setUserPoint(mapView.getUserPoint().x + eastStep, mapView.getUserPoint().y);
+			
+		}
+		
+		else if (hitAWallAtEastWest(mapView.getUserPoint())){
+			userInstruction = "face the wall and turn 90 degree to right";
+			mapView.setUserPoint(mapView.getUserPoint().x , mapView.getUserPoint().y + northStep);
+			
+		}
+		else if (Math.abs(firstPoint.x - secondPoint.x) < tolerance &&
+				Math.abs(firstPoint.y - secondPoint.y) < tolerance){
+			userInstruction = "you get there";
+			mapView.setUserPoint(mapView.getUserPoint().x, mapView.getUserPoint().y );
+			
+		}
+		else{
+			mapView.setUserPoint(mapView.getUserPoint().x +eastStep , mapView.getUserPoint().y + northStep);
+		}	
+	} 
+		
+	
+	public static void setInstruction(){
+		instructionView.setText(userInstruction);
+	}
+	public static boolean hitAWallAtEastWest (PointF firstPoint){
+		
+		if (mapView.calculateIntersections(firstPoint, new PointF(firstPoint.x + tolerance, firstPoint.y)).isEmpty() == false
+				|| mapView.calculateIntersections(firstPoint, new PointF(firstPoint.x - tolerance, firstPoint.y -1)).isEmpty() == false){
+		
+			return true;
+			
+		}
+		
+		else{
+			return false;
+		}
+		
+	}
+	
+	public static boolean hitAWallAtNorthSouth (PointF firstPoint){
+		
+		if (mapView.calculateIntersections(firstPoint, new PointF(firstPoint.x , firstPoint.y + tolerance)).isEmpty() ==  false
+				|| mapView.calculateIntersections(firstPoint, new PointF(firstPoint.x, firstPoint.y - tolerance)).isEmpty() == false){
+		
+			return true;
+			
+		}
+		
+		else{
+			return false;
+		}
+		
+	}
+
+//	This is the method we used to filter out values
+	public static float LowPassFilter(float[] sensorInput ){
+		float previousInput = sensorInput[0];
+		float currentInput = sensorInput[1];
+		currentInput = 0.3f*previousInput + 0.7f*currentInput;
+		
+		return currentInput;
+		
+		
+	}
+	
+	// Resets stored maximum values for step counter, axis displacements, and accelerometer x, y, z axes, 
+	public static void reset(){
+		stepCounter = 0;
+		northDisplace = 0;
+		eastDisplace = 0;
+		xMax = 0;
+		yMax = 0;
+		zMax = 0;
+		intercept.clear();
+		mapView.removeAllLabeledPoints();
+		mapView.setUserPoint(new PointF(0,0));
+		mapView.setSelectedPoint(new PointF(0,0));
+		mapView.setStartPoint(new PointF(0,0));
+		mapView.setDestPoint(new PointF(0,0));
+	}
+	
+	public static float getAngle(){
+		returnAngle = (float) (((list[0]  - referenceAngle)/Math.PI)*180f);
+		return returnAngle;
+	}
+	
+	// Class constructor specifying TextView and graph on which to display data 
+//	public AccelerationSensorEventListener (TextView outputView, LineGraphView graph){
+	public AccelerationSensorEventListener (TextView outputView, TextView instruction, Mapper map){
+		output = outputView;
+//		graphView = graph;
+		instructionView = instruction;
+		mapView = map;
+	}
+	
+	@Override
+	public void onAccuracyChanged(Sensor s, int i) {}
+
+	@Override
+	public void onSensorChanged(SensorEvent se) {
+		
+		
+		
+//		//calculate the path between those points
+		angle = FloatHelper.angleBetween(mapView.getUserPoint(), startPoint,referencePoint );
+//		distance = 
+//				FloatHelper.distance(mapView.getStartPoint(), mapView.getEndPoint());
+		
+//		output.setText(mapView.getStartPoint()+ "");
+		
+//		Define a rotation sensor event listener for the rotation matrix and orientation
+		RotationalSensorEventListener rotationVector = new RotationalSensorEventListener();
+		SensorManager.getRotationMatrixFromVector(R, rotationVector.getResult());
+//		Get orientation; first value in 'list' is compass bearing, north=0
+		SensorManager.getOrientation(R, list);
+		
+		
+		if (se.sensor.getType() == Sensor.TYPE_LINEAR_ACCELERATION){
+		
+//			store the new value and previous value in to an array and pass to LowPass Filter Method for filtering
+			xArray[0] = xArray [1];
+			xArray[1] = se.values[0];
+//			assign the Filtered value into an array called result
+			result [0] = LowPassFilter(xArray);
+			
+			yArray[0] = yArray [1];
+			yArray[1] = se.values[1];
+			result [1] = LowPassFilter(yArray);
+			
+			zArray[0] = zArray [1];
+			zArray[1] = se.values[2];
+			result [2] = LowPassFilter(zArray);
+			
+//			implement the step counter method (which also calculates displacement)
+			stepCounter(result);
+			setInstruction();
+			
+//			check the new value and assign to variable if the new value is greater
+			if (xMax < Math.abs(se.values[0])){
+				xMax = Math.abs(se.values[0]);
+			}
+
+			if (yMax < Math.abs(se.values[1])){
+				yMax = Math.abs(se.values[1]);
+			}
+
+			if (zMax < Math.abs(se.values[2])){
+				zMax = Math.abs(se.values[2]);
+			}
+			
+			if (zMin > se.values[2]){
+				zMin = se.values[2];
+			}
+			
+// 			Output step counter, step displacements, and 
+//			new axes values and current axes maximums as text to three decimal places
+			
+			output.setText("--------------------Step Counter-------------------" + "\n" + 
+//							"X Max: " + String.format("%.3f", xMax) + "\n" + 
+//							"Y: " + String.format("%.3f", yMax) + "\n" + 
+//							"Z: " + String.format("%.3f", zMax) + "\n" + 
+//							"X Result: " + String.format("%.3f", result[0]) + "\n" + 
+//							"Y Result: " + String.format("%.3f", result[1]) + "\n" + 
+//							"Z Result: " + String.format("%.3f", result[2]) + "\n" +
+							"StepCounter : " + stepCounter + "\n" +
+//							"StateCounter: " +  stateCounter + "\n" +
+							"North Displacement: " + String.format("%.3f", northDisplace) + "\n" +
+							"East Displacement: " + String.format("%.3f", eastDisplace) + "\n" +
+							"Angle: " + String.format("%.3f Degree", list[0]/Math.PI*180) + "\n" +
+							"UserPoint: " + mapView.getEndPoint() + "\n" +
+//							"SelectedPoint: " + mapView.getStartPoint()+ "\n" +
+							"StartPoint: "+ mapView.getStartPoint() + "\n" + 
+//							"EndPoint: " + mapView.getEndPoint() + "\n" + 
+							"Angle: " + (angle/Math.PI)*180 + " degree" + "\n"+
+							userInstruction + "\n" +
+							"-------------------------");
+//			mapView.setUserPath(mapView.userPath);
+			// Add new values to displayed graph
+//			graphView.addPoint(result);
+			
+			
+//			public void createPath (PointF start, PointF end){
+//				userPath.add(start);
+//				currentPoint = start;
+//				
+//				float lineAngle = FloatHelper.angleBetween(start, new PointF(start.x + 1,start.y), end);
+//				int stepCount = (int) Math.ceil( FloatHelper.distance(start, end)/stepLength );
+//				
+//				for (int i=0; i < stepCount; i++){
+//					currentPoint.y += (float) Math.sin(lineAngle);
+//					currentPoint.x += (float) Math.cos(lineAngle);
+//					userPath.add(currentPoint);
+//				}
+//			}
+			
+			
+//			for (InterceptPoint point : interceptPoints){
+//				listString += point.getPoint() + "\n";
+//			}
+
+		}
+	}
+}
